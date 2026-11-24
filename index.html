@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Text2Sign</title>
+<style>
+:root{--bg:#0e0e10;--panel:#1a1a1d;--line:#34343a;--text:#eceff1;--muted:#8a9099;--accent:#4dd0e1}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+h1{margin:0;padding:14px 16px 0;font-size:1.1rem;font-weight:600;letter-spacing:.02em;color:var(--muted)}
+main{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;padding:8px 16px 0}
+#word{height:44px;line-height:44px;font-size:clamp(1.5rem,5vw,2.2rem);font-weight:700;letter-spacing:.12em;color:var(--accent);text-align:center}
+#word.idle{font-size:1rem;font-weight:400;letter-spacing:0;color:var(--muted)}
+#msg{height:24px;font-size:.95rem;color:var(--muted);text-align:center}
+#msg.warn{color:#ffb74d}
+#stage{flex:1;min-height:0;width:100%;max-width:560px}
+#fig{width:100%;height:100%;display:block}
+#hint{margin:0;padding:6px 0 10px;font-size:.8rem;color:var(--muted);text-align:center}
+form{display:flex;gap:8px;padding:12px 16px;background:var(--panel);border-top:1px solid var(--line)}
+input{flex:1;min-width:0;padding:13px 14px;font-size:1rem;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:10px;outline:none}
+input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button{padding:0 18px;font-size:1rem;font-weight:600;border-radius:10px;border:1px solid var(--line);cursor:pointer;color:var(--text);background:transparent}
+#go{background:var(--accent);border-color:var(--accent);color:#06292e}
+</style>
+</head>
+<body>
+<h1>Text2Sign</h1>
+<main>
+  <div id="word" class="idle" aria-live="polite">Type a word and press Convert</div>
+  <div id="msg"></div>
+  <div id="stage">
+    <svg id="fig" viewBox="40 60 320 400" role="img" aria-label="Stickman signing">
+      <g stroke="#cfd8dc" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none">
+        <line x1="200" y1="330" x2="168" y2="440"/>
+        <line x1="200" y1="330" x2="232" y2="440"/>
+        <g id="upper">
+          <line x1="200" y1="158" x2="200" y2="330"/>
+          <line x1="168" y1="196" x2="232" y2="196"/>
+          <polyline id="armL" points=""/>
+          <polyline id="armR" points=""/>
+          <ellipse id="handL" rx="13" ry="8" fill="#4dd0e1" stroke="none"/>
+          <ellipse id="handR" rx="13" ry="8" fill="#4dd0e1" stroke="none"/>
+          <g id="head">
+            <circle cx="200" cy="130" r="28" fill="#0e0e10"/>
+            <g id="face">
+              <circle id="eyeL" cx="190" cy="126" r="3" fill="#cfd8dc" stroke="none"/>
+              <circle id="eyeR" cx="210" cy="126" r="3" fill="#cfd8dc" stroke="none"/>
+              <path d="M191 139 Q200 146 209 139" stroke-width="3"/>
+            </g>
+          </g>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p id="hint">Supported: hello, thank you, yes, no, please, sorry</p>
+</main>
+<form id="f" autocomplete="off">
+  <input id="txt" type="text" placeholder="Enter your text here..." aria-label="Text to convert">
+  <button id="go" type="submit">Convert</button>
+  <button id="clr" type="button">Clear</button>
+</form>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var rad = function (d) { return d * Math.PI / 180; };
+
+  // Pose: ru/rf = upper arm / forearm angle (screen-right arm), lu/lf = same for screen-left arm.
+  // 0 = pointing down, 90 = out sideways, 180 = straight up. rh/lh = hand length (13 open, 8 fist).
+  // hx/hy = head offset, lean = body tilt in degrees.
+  var REST = { ru: 8, rf: 4, lu: 8, lf: 4, rh: 13, lh: 13, hx: 0, hy: 0, lean: 0 };
+  var cur = Object.assign({}, REST);
+
+  function arm(line, hand, sx, u, f, hl) {
+    var s = sx < 200 ? -1 : 1;
+    var ex = sx + 70 * s * Math.sin(rad(u)), ey = 196 + 70 * Math.cos(rad(u));
+    var fx = ex + 65 * s * Math.sin(rad(f)), fy = ey + 65 * Math.cos(rad(f));
+    line.setAttribute('points', sx + ',196 ' + ex.toFixed(1) + ',' + ey.toFixed(1) + ' ' + fx.toFixed(1) + ',' + fy.toFixed(1));
+    var a = Math.atan2(Math.cos(rad(f)), s * Math.sin(rad(f)));
+    var cx = fx + Math.cos(a) * hl * 0.5, cy = fy + Math.sin(a) * hl * 0.5;
+    hand.setAttribute('rx', hl.toFixed(1));
+    hand.setAttribute('cx', cx.toFixed(1));
+    hand.setAttribute('cy', cy.toFixed(1));
+    hand.setAttribute('transform', 'rotate(' + (a * 180 / Math.PI).toFixed(1) + ' ' + cx.toFixed(1) + ' ' + cy.toFixed(1) + ')');
+  }
+
+  function render(p) {
+    arm($('armR'), $('handR'), 232, p.ru, p.rf, p.rh);
+    arm($('armL'), $('handL'), 168, p.lu, p.lf, p.lh);
+    $('head').setAttribute('transform', 'translate(' + p.hx.toFixed(1) + ' ' + p.hy.toFixed(1) + ')');
+    $('face').setAttribute('transform', 'translate(' + (p.hx * 0.8).toFixed(1) + ' 0)');
+    $('upper').setAttribute('transform', 'rotate(' + p.lean.toFixed(1) + ' 200 330)');
+  }
+
+  var runId = 0;
+
+  // Move smoothly from the current pose to the keys listed in "to".
+  // Resolves true when finished, false if a newer run cancelled it.
+  function tween(to, dur, id) {
+    return new Promise(function (resolve) {
+      var from = Object.assign({}, cur), t0 = performance.now();
+      function step(now) {
+        if (id !== runId) { resolve(false); return; }
+        var t = Math.min(1, (now - t0) / dur);
+        var e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        for (var k in to) cur[k] = from[k] + (to[k] - from[k]) * e;
+        render(cur);
+        if (t < 1) requestAnimationFrame(step); else resolve(true);
+      }
+      requestAnimationFrame(step);
+    });
+  }
+
+  // Gestures: lists of [duration ms, pose changes]. Unlisted keys keep their value.
+  var G = {};
+  G.HELLO = [
+    [450, { ru: 120, rf: 165 }],
+    [250, { rf: 200 }], [250, { rf: 150 }], [250, { rf: 200 }], [250, { rf: 150 }], [250, { rf: 185 }]
+  ];
+  G['THANK YOU'] = [
+    [450, { ru: 95, rf: 232 }],
+    [250, { hy: 6 }],
+    [600, { ru: 80, rf: 140, hy: 0 }],
+    [400, { ru: 70, rf: 105 }]
+  ];
+  G.YES = [[400, { ru: 70, rf: 185, rh: 8 }]];
+  for (var i = 0; i < 3; i++) G.YES.push([230, { rf: 155, hy: 0 }], [230, { rf: 205, hy: 8 }]);
+  G.NO = [[400, { ru: 70, rf: 185, rh: 13 }]];
+  for (var j = 0; j < 3; j++) G.NO.push([200, { hx: -9, rh: 7 }], [200, { hx: 9, rh: 13 }]);
+  G.NO.push([200, { hx: 0 }]);
+  G.PLEASE = [[450, { ru: 40, rf: 262 }]];
+  for (var c = 0; c < 2; c++) G.PLEASE.push(
+    [300, { ru: 40, rf: 250 }], [300, { ru: 50, rf: 262 }], [300, { ru: 38, rf: 275 }], [300, { ru: 28, rf: 262 }]);
+  G.SORRY = [[500, { ru: 40, rf: 262, rh: 8, hy: 8, lean: 4 }]];
+  for (var d = 0; d < 2; d++) G.SORRY.push(
+    [380, { ru: 40, rf: 250 }], [380, { ru: 50, rf: 262 }], [380, { ru: 38, rf: 275 }], [380, { ru: 28, rf: 262 }]);
+
+  var ALIAS = {
+    hello: 'HELLO', hi: 'HELLO', hey: 'HELLO',
+    'thank you': 'THANK YOU', thanks: 'THANK YOU', thankyou: 'THANK YOU',
+    yes: 'YES', yeah: 'YES', yep: 'YES',
+    no: 'NO', nope: 'NO',
+    please: 'PLEASE', sorry: 'SORRY'
+  };
+
+  function tokenize(text) {
+    var w = text.toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean), out = [];
+    for (var k = 0; k < w.length; k++) {
+      if (w[k] === 'thank' && w[k + 1] === 'you') { out.push('thank you'); k++; }
+      else out.push(w[k]);
+    }
+    return out;
+  }
+
+  function setWord(t) {
+    var el = $('word');
+    el.textContent = t || 'Type a word and press Convert';
+    el.className = t ? '' : 'idle';
+  }
+  function setMsg(t, warn) { var m = $('msg'); m.textContent = t || ''; m.className = warn ? 'warn' : ''; }
+
+  async function play(text) {
+    var id = ++runId, words = tokenize(text);
+    setMsg('');
+    if (!words.length) { setWord(''); setMsg('Please enter some text.', true); await tween(REST, 300, id); return; }
+    await tween(REST, 250, id);
+    for (var n = 0; n < words.length; n++) {
+      if (id !== runId) return;
+      var w = words[n], key = ALIAS[w];
+      setWord(w.toUpperCase());
+      if (!key) {
+        setMsg('Sign not available for this word.', true);
+        if (!(await tween({}, 1300, id))) return;
+        setMsg('');
+        continue;
+      }
+      var frames = G[key];
+      for (var q = 0; q < frames.length; q++) {
+        if (!(await tween(frames[q][1], frames[q][0], id))) return;
+      }
+      if (!(await tween(REST, 500, id))) return;
+      if (!(await tween({}, 200, id))) return;
+    }
+    if (id === runId) { setWord(''); setMsg('Done'); }
+  }
+
+  $('f').addEventListener('submit', function (e) {
+    e.preventDefault();
+    play($('txt').value);
+  });
+  $('clr').addEventListener('click', function () {
+    var id = ++runId;
+    $('txt').value = '';
+    setWord(''); setMsg('');
+    tween(REST, 300, id);
+    $('txt').focus();
+  });
+
+  render(cur);
+})();
+</script>
+</body>
+</html>
